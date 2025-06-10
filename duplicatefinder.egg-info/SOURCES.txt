@@ -1,0 +1,9 @@
+LICENSE
+README.md
+findduplicates.py
+setup.py
+duplicatefinder.egg-info/PKG-INFO
+duplicatefinder.egg-info/SOURCES.txt
+duplicatefinder.egg-info/dependency_links.txt
+duplicatefinder.egg-info/entry_points.txt
+duplicatefinder.egg-info/top_level.txt
