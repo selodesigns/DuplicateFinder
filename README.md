@@ -1,10 +1,11 @@
 # Duplicate Function Finder
 
-A Python tool to find and report duplicate function definitions across Python projects. 
+A Python tool to find and report duplicate function definitions across Python and C# projects. 
 
 ## Features
 
 - Finds functions with identical code/names across your project
+- Supports both Python and C# code files
 - Supports recursive directory scanning
 - Detailed reports showing exactly where duplications occur
 - Option to ignore function names when finding duplicates
@@ -53,6 +54,12 @@ findduplicates /path/to/your/project -i
 
 # Get more verbose output
 findduplicates /path/to/your/project -v
+
+# Scan only Python files
+findduplicates /path/to/your/project --python-only
+
+# Scan only C# files
+findduplicates /path/to/your/project --csharp-only
 ```
 
 ### Options
@@ -61,6 +68,8 @@ findduplicates /path/to/your/project -v
 - `-o, --output`: Output file to save report (defaults to stdout)
 - `-i, --ignore-names`: Consider functions with identical code but different names as duplicates
 - `-v, --verbose`: Print verbose information
+- `--python-only`: Only scan Python (.py) files
+- `--csharp-only`: Only scan C# (.cs) files
 
 ## Example Output
 

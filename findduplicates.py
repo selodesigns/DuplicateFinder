@@ -3,19 +3,20 @@
 """
 Duplicate Function Finder
 
-A tool to find and report duplicate function definitions across Python files.
+A tool to find and report duplicate function definitions across Python and C# files.
 Use this script to identify code duplication in your projects.
 
 Author: Sean Elovirta (SELOdev)
-Version: 1.0.0
+Version: 1.1.0
 """
 import os
 import ast
 import hashlib
 import argparse
+import re
 from collections import defaultdict
 import sys
-from typing import Dict, List, Tuple, Set, Any
+from typing import Dict, List, Tuple, Set, Any, Optional
 
 
 class FunctionInfo:
@@ -76,52 +77,179 @@ class FunctionParser(ast.NodeVisitor):
 
 
 def extract_functions_from_file(file_path: str) -> List[FunctionInfo]:
-    """Extract all function definitions from a Python file."""
+    """Extract all function definitions from a source file.
+    
+    Args:
+        file_path: Path to the source file
+        
+    Returns:
+        List of FunctionInfo objects representing functions found in the file
+    """
+    file_ext = os.path.splitext(file_path)[1].lower()
+    
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             source = f.read()
             source_lines = source.splitlines()
         
-        try:
-            tree = ast.parse(source)
-            parser = FunctionParser(file_path, source_lines)
-            parser.visit(tree)
-            return parser.functions
-        except SyntaxError as e:
-            print(f"Syntax error in {file_path}: {e}", file=sys.stderr)
+        if file_ext == '.py':
+            return extract_python_functions(file_path, source, source_lines)
+        elif file_ext == '.cs':
+            return extract_csharp_functions(file_path, source, source_lines)
+        else:
+            print(f"Unsupported file type: {file_ext}", file=sys.stderr)
             return []
     except Exception as e:
         print(f"Error processing {file_path}: {e}", file=sys.stderr)
         return []
 
 
-def find_python_files(directory: str) -> List[str]:
-    """Find all Python files in the given directory and its subdirectories."""
-    python_files = []
-    for root, _, files in os.walk(directory):
-        for file in files:
-            if file.endswith('.py'):
-                python_files.append(os.path.join(root, file))
-    return python_files
+def extract_python_functions(file_path: str, source: str, source_lines: List[str]) -> List[FunctionInfo]:
+    """Extract all function definitions from a Python file."""
+    try:
+        tree = ast.parse(source)
+        parser = FunctionParser(file_path, source_lines)
+        parser.visit(tree)
+        return parser.functions
+    except SyntaxError as e:
+        print(f"Syntax error in {file_path}: {e}", file=sys.stderr)
+        return []
 
 
-def find_duplicate_functions(directory: str, ignore_names: bool = False) -> Dict[str, List[FunctionInfo]]:
-    """Find duplicate functions in all Python files in the given directory.
+def extract_csharp_functions(file_path: str, source: str, source_lines: List[str]) -> List[FunctionInfo]:
+    """Extract all function/method definitions from a C# file.
+    
+    This uses regex to find C# function definitions. It's not as robust as a proper parser
+    but should work for most common C# function patterns.
+    """
+    functions = []
+    
+    # Match C# method declarations
+    # This pattern matches common C# method declarations including modifiers, return types, method names and parameters
+    method_pattern = r'(?:\s|^)(?:public|private|protected|internal|static|virtual|override|abstract|async|sealed)?(?:\s+(?:public|private|protected|internal|static|virtual|override|abstract|async|sealed))*\s+(?:[A-Za-z0-9_<>\[\]\.,\s]+?)\s+([A-Za-z0-9_]+)\s*\([^\)]*\)\s*(?:{|=>)'    
+    
+    # Find all method declarations
+    for match in re.finditer(method_pattern, source):
+        method_name = match.group(1)  # The method name is in the first capture group
+        start_pos = match.start()
+        
+        # Find the line number where this method starts
+        start_line = 1
+        for i, line in enumerate(source_lines):
+            if start_pos <= len(line) + i:  # +i accounts for newline characters
+                start_line = i + 1  # Convert to 1-indexed
+                break
+            start_pos -= len(line) + 1  # +1 for the newline character
+        
+        # Find the method body and end line
+        if '{' in source[match.start():match.start()+100]:  # Check if it's a block body
+            # Find matching closing brace
+            open_count = 0
+            in_string = False
+            string_char = None
+            end_pos = match.end()
+            
+            while end_pos < len(source):
+                char = source[end_pos]
+                
+                # Handle string literals to ignore braces inside strings
+                if char in '"\'' and (end_pos == 0 or source[end_pos-1] != '\\'):
+                    if not in_string:
+                        in_string = True
+                        string_char = char
+                    elif char == string_char:
+                        in_string = False
+                
+                if not in_string:
+                    if char == '{':
+                        open_count += 1
+                    elif char == '}':
+                        open_count -= 1
+                        if open_count == 0:  # Found the matching closing brace
+                            break
+                
+                end_pos += 1
+            
+            # Find the line number where the method ends
+            end_line = start_line
+            chars_counted = 0
+            for i, line in enumerate(source_lines[start_line-1:]):
+                chars_counted += len(line) + 1  # +1 for newline
+                if chars_counted >= (end_pos - match.start()):
+                    end_line = start_line + i
+                    break
+        else:  # It's an expression-bodied member (=>)
+            # Find the semicolon at the end
+            end_pos = source.find(';', match.end())
+            if end_pos == -1:  # No semicolon found
+                end_pos = len(source)
+                
+            # Find the line number where the method ends
+            end_line = start_line
+            chars_counted = 0
+            for i, line in enumerate(source_lines[start_line-1:]):
+                chars_counted += len(line) + 1  # +1 for newline
+                if chars_counted >= (end_pos - match.start()):
+                    end_line = start_line + i
+                    break
+        
+        # Get the method source code
+        method_code = '\n'.join(source_lines[start_line-1:end_line])
+        
+        # Create and add the function info
+        func_info = FunctionInfo(
+            name=method_name,
+            code=method_code,
+            file_path=file_path,
+            start_line=start_line,
+            end_line=end_line
+        )
+        functions.append(func_info)
+    
+    return functions
+
+
+def find_source_files(directory: str, file_types: List[str]) -> Dict[str, List[str]]:
+    """Find all files of specified types in the given directory and its subdirectories.
     
     Args:
-        directory: The root directory to search for Python files
+        directory: The root directory to search for files
+        file_types: List of file extensions to find (e.g., ['.py', '.cs'])
+        
+    Returns:
+        A dictionary mapping file types to lists of file paths
+    """
+    files_by_type = defaultdict(list)
+    for root, _, files in os.walk(directory):
+        for file in files:
+            file_ext = os.path.splitext(file)[1].lower()
+            if file_ext in file_types:
+                files_by_type[file_ext].append(os.path.join(root, file))
+    return files_by_type
+
+
+def find_duplicate_functions(directory: str, ignore_names: bool = False, file_types: List[str] = ['.py', '.cs']) -> Dict[str, List[FunctionInfo]]:
+    """Find duplicate functions in all supported files in the given directory.
+    
+    Args:
+        directory: The root directory to search for files
         ignore_names: If True, functions with different names but identical code will be considered duplicates
+        file_types: List of file extensions to search (default: ['.py', '.cs'])
         
     Returns:
         A dictionary mapping content hashes to lists of function infos with identical content
     """
-    python_files = find_python_files(directory)
-    print(f"Found {len(python_files)} Python files")
+    files_by_type = find_source_files(directory, file_types)
+    
+    # Print summary of found files
+    for file_type, files in files_by_type.items():
+        print(f"Found {len(files)} {file_type} files")
     
     all_functions = []
-    for file_path in python_files:
-        functions = extract_functions_from_file(file_path)
-        all_functions.extend(functions)
+    for file_type, files in files_by_type.items():
+        for file_path in files:
+            functions = extract_functions_from_file(file_path)
+            all_functions.extend(functions)
     
     print(f"Found {len(all_functions)} functions")
     
@@ -157,7 +285,16 @@ def format_duplicates_report(duplicates: Dict[str, List[FunctionInfo]]) -> str:
             report.append(f"  - {os.path.relpath(func.file_path)} (lines {func.start_line}-{func.end_line})")
         
         report.append("\nFunction code:")
-        report.append("```python")
+        # Determine the language based on file extension
+        file_ext = os.path.splitext(sample_func.file_path)[1].lower()
+        if file_ext == '.py':
+            code_lang = "python"
+        elif file_ext == '.cs':
+            code_lang = "csharp"
+        else:
+            code_lang = "text"
+            
+        report.append(f"```{code_lang}")
         report.append(sample_func.code)
         report.append("```")
         report.append("-" * 80)
@@ -188,11 +325,11 @@ def save_report_to_file(report: str, output_path: str, target_dir: str = None) -
 def main():
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
-        description="Find duplicate functions in Python files"
+        description="Find duplicate functions in Python and C# files"
     )
     parser.add_argument(
         "directory", 
-        help="Directory to scan for Python files",
+        help="Directory to scan for Python and C# files",
         default=".",
         nargs="?"
     )
@@ -210,6 +347,16 @@ def main():
         help="Print verbose information",
         action="store_true"
     )
+    parser.add_argument(
+        "--python-only",
+        help="Only scan Python files",
+        action="store_true"
+    )
+    parser.add_argument(
+        "--csharp-only",
+        help="Only scan C# files",
+        action="store_true"
+    )
     
     args = parser.parse_args()
     
@@ -218,7 +365,16 @@ def main():
     if args.verbose:
         print(f"Scanning directory: {directory}")
     
-    duplicates = find_duplicate_functions(directory, args.ignore_names)
+    # Determine which file types to scan
+    file_types = []
+    if args.python_only:
+        file_types = ['.py']
+    elif args.csharp_only:
+        file_types = ['.cs']
+    else:
+        file_types = ['.py', '.cs']
+    
+    duplicates = find_duplicate_functions(directory, args.ignore_names, file_types)
     
     # Generate and output report
     report = format_duplicates_report(duplicates)
